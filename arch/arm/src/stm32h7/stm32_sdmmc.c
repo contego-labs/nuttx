@@ -1382,8 +1382,14 @@ static void stm32_recvdma(struct stm32_dev_s *priv)
        * we receive them one-by-one
        */
 
-      /* Copy the received data to client buffer */
+      /* Copy the received data to client buffer.  The Cortex-M7 may have
+       * speculatively refilled lines of sdmmc_rxbuffer while the IDMA was
+       * writing it; drop them first so the copy reads the new block.
+       * (sdmmc_rxbuffer is cache-line aligned, blocksize a multiple.)
+       */
 
+      up_invalidate_dcache((uintptr_t)sdmmc_rxbuffer,
+                           (uintptr_t)sdmmc_rxbuffer + priv->blocksize);
       memcpy(priv->buffer, sdmmc_rxbuffer, priv->blocksize);
 
       /* Invalidate the cache before receiving next block */
@@ -1397,8 +1403,16 @@ static void stm32_recvdma(struct stm32_dev_s *priv)
     }
   else
     {
-      /* In an aligned case, we have always received all blocks */
+      /* In an aligned case, we have always received all blocks.
+       * Invalidate again after the transfer (as upstream NuttX does): the
+       * pre-DMA invalidate in stm32_dmarecvsetup() does not stop the M7
+       * speculatively caching the buffer during the DMA, and those stale
+       * lines would shadow the received data.  Buffer and length are
+       * cache-line aligned on this path.
+       */
 
+      up_invalidate_dcache((uintptr_t)priv->buffer,
+                           (uintptr_t)priv->buffer + priv->receivecnt);
       priv->remaining = 0;
     }
 
